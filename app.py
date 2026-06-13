@@ -17,23 +17,61 @@ def allowed_file(filename):
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-def analyze_bpm(file_path):
+def analyze_bpm(file_path, num_estimates=5):
     y, sr = librosa.load(file_path, sr=None)
-    tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
-    beat_times = librosa.frames_to_time(beat_frames, sr=sr)
-    confidence = float(np.std(librosa.onset.onset_strength(y=y, sr=sr)))
+    duration = float(librosa.get_duration(y=y, sr=sr))
 
-    if isinstance(tempo, np.ndarray):
-        tempo = float(tempo.item() if tempo.size == 1 else tempo[0])
+    onset_env = librosa.onset.onset_strength(y=y, sr=sr)
+    base_confidence = float(np.std(onset_env))
+
+    tempo_estimates = []
+    beat_counts = []
+
+    start_bpm_range = [80, 100, 120]
+    tightness_range = [100, 200, 300, 400, 500]
+
+    for start_bpm in start_bpm_range:
+        for tightness in tightness_range[:max(1, num_estimates // len(start_bpm_range) + 1)]:
+            try:
+                tempo, beat_frames = librosa.beat.beat_track(
+                    y=y,
+                    sr=sr,
+                    onset_envelope=onset_env,
+                    start_bpm=start_bpm,
+                    tightness=tightness
+                )
+                if isinstance(tempo, np.ndarray):
+                    tempo_val = float(tempo.item() if tempo.size == 1 else tempo[0])
+                else:
+                    tempo_val = float(tempo)
+
+                if 40 <= tempo_val <= 250:
+                    tempo_estimates.append(tempo_val)
+                    beat_counts.append(len(beat_frames))
+            except Exception:
+                continue
+
+    if len(tempo_estimates) == 0:
+        tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr, onset_envelope=onset_env)
+        if isinstance(tempo, np.ndarray):
+            final_tempo = float(tempo.item() if tempo.size == 1 else tempo[0])
+        else:
+            final_tempo = float(tempo)
+        beat_count = len(beat_frames)
+        tempo_std = 0.0
     else:
-        tempo = float(tempo)
+        final_tempo = float(np.median(tempo_estimates))
+        tempo_std = float(np.std(tempo_estimates))
+        beat_count = int(np.median(beat_counts)) if beat_counts else 0
 
     return {
-        'bpm': round(tempo, 2),
-        'beat_count': len(beat_times),
-        'duration': round(float(librosa.get_duration(y=y, sr=sr)), 2),
+        'bpm': round(final_tempo, 2),
+        'beat_count': beat_count,
+        'duration': round(duration, 2),
         'sample_rate': int(sr),
-        'confidence': round(confidence, 4)
+        'confidence': round(base_confidence, 4),
+        'estimation_count': len(tempo_estimates) if tempo_estimates else 1,
+        'bpm_std': round(tempo_std, 4)
     }
 
 
